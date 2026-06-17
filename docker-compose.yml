@@ -1,0 +1,136 @@
+version: '3.8'
+
+services:
+  # MSSQL Server Database
+  mssql:
+    image: mcr.microsoft.com/mssql/server:2019-latest
+    container_name: baorco-mssql
+    environment:
+      SA_PASSWORD: "Your@SecurePassword123"
+      ACCEPT_EULA: "Y"
+    ports:
+      - "1433:1433"
+    volumes:
+      - mssql_data:/var/opt/mssql
+    networks:
+      - baorco-network
+
+  # Redis for Celery
+  redis:
+    image: redis:7-alpine
+    container_name: baorco-redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    networks:
+      - baorco-network
+
+  # Django API Server
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: baorco-api
+    command: >
+      sh -c "python manage.py migrate &&
+             python manage.py collectstatic --noinput &&
+             gunicorn core.wsgi:application --bind 0.0.0.0:8000"
+    ports:
+      - "8000:8000"
+    environment:
+      - DEBUG=False
+      - SECRET_KEY=your-secret-key-change-in-production
+      - DB_NAME=BAORCO_Shop
+      - DB_USER=sa
+      - DB_PASSWORD=Your@SecurePassword123
+      - DB_HOST=mssql
+      - DB_PORT=1433
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+      - SMS_API_KEY=2qAmtPjmMp7YZ6tkLNzW1nZ4AAj5nRpaA7mZacUbD85xAB4G
+      - ALLOWED_HOSTS=localhost,127.0.0.1,api
+    depends_on:
+      - mssql
+      - redis
+    volumes:
+      - ./media:/app/media
+      - ./logs:/app/logs
+    networks:
+      - baorco-network
+
+  # Celery Worker
+  celery:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: baorco-celery
+    command: celery -A core worker -l info
+    environment:
+      - DEBUG=False
+      - SECRET_KEY=your-secret-key-change-in-production
+      - DB_NAME=BAORCO_Shop
+      - DB_USER=sa
+      - DB_PASSWORD=Your@SecurePassword123
+      - DB_HOST=mssql
+      - DB_PORT=1433
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+    depends_on:
+      - mssql
+      - redis
+      - api
+    volumes:
+      - ./logs:/app/logs
+    networks:
+      - baorco-network
+
+  # Celery Beat (Scheduler)
+  celery-beat:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: baorco-celery-beat
+    command: celery -A core beat -l info
+    environment:
+      - DEBUG=False
+      - SECRET_KEY=your-secret-key-change-in-production
+      - DB_NAME=BAORCO_Shop
+      - DB_USER=sa
+      - DB_PASSWORD=Your@SecurePassword123
+      - DB_HOST=mssql
+      - DB_PORT=1433
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+    depends_on:
+      - mssql
+      - redis
+      - api
+    volumes:
+      - ./logs:/app/logs
+    networks:
+      - baorco-network
+
+  # Nginx Reverse Proxy
+  nginx:
+    image: nginx:alpine
+    container_name: baorco-nginx
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./media:/app/media:ro
+      - ./staticfiles:/app/staticfiles:ro
+    depends_on:
+      - api
+    networks:
+      - baorco-network
+
+volumes:
+  mssql_data:
+  redis_data:
+
+networks:
+  baorco-network:
+    driver: bridge
